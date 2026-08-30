@@ -901,8 +901,9 @@ async function pullCloud(silent){
       await pushCloud(true);
     }
     pendingCloud=false;
-    setSyncPill('ซิงค์แล้ว — ใช้มือถือได้ตลอด');
-    if(!silent) showToast('ซิงค์ข้อมูลแล้ว');
+    const n=entryCount(db);
+    setSyncPill(n?'คลาวด์แล้ว · '+n+' รายการ':'เชื่อมคลาวด์แล้ว ยังไม่มีรายการ');
+    if(!silent) showToast(n?'ซิงค์แล้ว '+n+' รายการ':'เชื่อมคลาวด์แล้ว');
   }catch(e){
     cloudMode=false;
     pendingCloud=true;
@@ -924,8 +925,9 @@ async function pushCloud(silent){
       db=returned;
       persistLocal();
     }
-    setSyncPill('ซิงค์แล้ว — ใช้มือถือได้ตลอด');
-    if(!silent) showToast('บันทึกขึ้นคลาวด์แล้ว');
+    const n=entryCount(db);
+    setSyncPill(n?'คลาวด์แล้ว · '+n+' รายการ':'เชื่อมคลาวด์แล้ว ยังไม่มีรายการ');
+    if(!silent) showToast('บันทึกขึ้นคลาวด์แล้ว · '+n+' รายการ');
   }catch(e){
     pendingCloud=true;
     setSyncPill('รอซิงค์ — ข้อมูลยังอยู่ในเครื่อง');
@@ -1259,10 +1261,8 @@ async function submitEntry(){
   document.getElementById('entryDate').value=date;
   renderBanner();
   renderEntryList();
-  showToast(wasEdit?'อัปเดตแล้ว ✅':'บันทึกในเครื่องแล้ว');
   try{
-    await pushCloud(true);
-    showToast(wasEdit?'อัปเดตแล้ว ซิงค์แล้ว ✅':'บันทึกแล้ว ซิงค์แล้ว ✅');
+    await pushCloud(false);
   }catch(e){
     showToast('บันทึกในเครื่องแล้ว จะซิงค์เมื่อมีเน็ต');
   }
@@ -1814,7 +1814,7 @@ function renderStorageMode(){
   const wrap=document.getElementById('modePillWrap');
   if(!wrap) return;
   wrap.innerHTML=cloudMode
-    ?'<span class="mode-pill mode-on">คลาวด์พร้อม — มือถือบันทึกได้ตลอด ข้อมูลไม่ตกหล่น</span>'
+    ?'<span class="mode-pill mode-on">คลาวด์พร้อม — กดบันทึกแล้วจะขึ้นคลาวด์ให้</span>'
     :'<span class="mode-pill mode-off">บันทึกในเครื่องแล้ว — เมื่อมีเน็ตจะซิงค์ให้อัตโนมัติ</span>';
   const help=document.getElementById('storageHelp');
   if(help){
