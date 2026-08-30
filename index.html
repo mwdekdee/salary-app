@@ -774,7 +774,10 @@ function idbOpen(){
 }
 async function idbGet(){
   try{
-    const dbi=await idbOpen();
+    const dbi=await Promise.race([
+      idbOpen(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('idb timeout')),2000))
+    ]);
     return await new Promise((resolve,reject)=>{
       const req=dbi.transaction('kv','readonly').objectStore('kv').get('db');
       req.onsuccess=()=>resolve(normalizeDb(req.result));
@@ -813,33 +816,59 @@ function readLocal(){
     return normalizeDb(JSON.parse(s));
   }catch(e){return null;}
 }
-function pickNewer(a,b){
+function entryCount(data){
+  return data && data.entries ? Object.keys(data.entries).length : 0;
+}
+
+function mergeDb(a,b){
   if(!a) return b;
   if(!b) return a;
-  return (a.updatedAt||0)>=(b.updatedAt||0)?a:b;
+  const aTime=a.updatedAt||0, bTime=b.updatedAt||0;
+  const newer=aTime>=bTime?a:b;
+  const older=newer===a?b:a;
+  const employees=(newer.employees&&newer.employees.length)?newer.employees:(older.employees||[]);
+  return{
+    employees: employees.map(e=>({...e, payMethod:e.payMethod||'cash'})),
+    entries: Object.assign({}, older.entries||{}, newer.entries||{}),
+    monthCfg: Object.assign({}, older.monthCfg||{}, newer.monthCfg||{}),
+    updatedAt: Math.max(aTime,bTime)
+  };
 }
 
 async function cloudRpc(name,body){
-  const res=await fetch(SB_URL+'/rest/v1/rpc/'+name,{
-    method:'POST',
-    headers:{
-      apikey:SB_ANON,
-      Authorization:'Bearer '+SB_ANON,
-      'Content-Type':'application/json'
-    },
-    body:JSON.stringify(body)
-  });
-  if(!res.ok) throw new Error('cloud '+res.status);
-  const text=await res.text();
-  if(!text||text==='null') return null;
-  return JSON.parse(text);
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),12000);
+  try{
+    const res=await fetch(SB_URL+'/rest/v1/rpc/'+name,{
+      method:'POST',
+      headers:{
+        apikey:SB_ANON,
+        Authorization:'Bearer '+SB_ANON,
+        'Content-Type':'application/json'
+      },
+      body:JSON.stringify(body),
+      signal:ctrl.signal
+    });
+    if(!res.ok) throw new Error('cloud '+res.status);
+    const text=await res.text();
+    if(!text||text==='null') return null;
+    return JSON.parse(text);
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+function paint(){
+  if(typeof renderChips!=='function') return;
+  renderChips();renderBanner();renderEntryList();renderFormWrap();
+  syncShopDisplay();renderStorageMode();
 }
 
 async function dbLoad(){
-  const local=pickNewer(await idbGet(), readLocal());
-  if(local) db=local;
+  let local=null;
+  try{ local=mergeDb(await idbGet(), readLocal()); }catch(e){ local=readLocal(); }
+  if(local) db=mergeDb(db, local);
   db.employees.forEach(e=>{if(!e.payMethod)e.payMethod='cash';});
-  if(!db.updatedAt) db.updatedAt=Date.now();
   persistLocal();
   setSyncPill('บันทึกในเครื่องแล้ว');
 
@@ -848,8 +877,7 @@ async function dbLoad(){
     if(res.ok){
       const remote=normalizeDb(await res.json());
       serverMode=true;
-      const chosen=pickNewer(db,remote);
-      if(chosen) db=chosen;
+      if(remote) db=mergeDb(db, remote);
       persistLocal();
     }
   }catch(e){ serverMode=false; }
@@ -863,16 +891,13 @@ async function pullCloud(silent){
     const remote=normalizeDb(await cloudRpc('salary_load',{p_key:SHOP_KEY}));
     cloudMode=true;
     if(remote){
-      const chosen=pickNewer(db,remote);
-      if(chosen && chosen!==db){
-        db=chosen;
-        persistLocal();
-        if(typeof renderChips==='function'){
-          renderChips();renderBanner();renderEntryList();renderFormWrap();
-        }
-      }
-      if((db.updatedAt||0)>(remote.updatedAt||0)) await pushCloud(true);
-    }else{
+      const before=entryCount(db);
+      db=mergeDb(db, remote);
+      persistLocal();
+      paint();
+      if((db.updatedAt||0)>(remote.updatedAt||0) || entryCount(db)>entryCount(remote)) await pushCloud(true);
+      else if(before && !entryCount(remote) && entryCount(db)) await pushCloud(true);
+    }else if(entryCount(db)){
       await pushCloud(true);
     }
     pendingCloud=false;
@@ -970,6 +995,7 @@ function scheduleSync(){
 async function pushToCloud(silent){
   const url=currentCloudUrl();
   if(!url){ if(!silent)showToast('⚠️ ยังไม่ได้ตั้งค่า Google Sheet URL'); return; }
+  if(silent && !entryCount(db)) return;
   try{
     await fetch(url,{
       method:'POST',
@@ -1216,7 +1242,7 @@ function cancelEdit(){
   document.getElementById('entryDate').value=todayStr();
 }
 
-function submitEntry(){
+async function submitEntry(){
   if(!selEmpId){showToast('เลือกพนักงานก่อนนะ');return;}
   const date=document.getElementById('entryDate').value;
   if(!date){showToast('กรุณาเลือกวันที่');return;}
@@ -1224,14 +1250,22 @@ function submitEntry(){
   const off =parseFloat(document.getElementById('fOff').value)||0;
   const ded =parseFloat(document.getElementById('fDed').value)||0;
   const note=document.getElementById('fNote').value.trim();
+  if(!adv && !off && !ded && !note){showToast('ใส่เบิก หยุด หัก หรือหมายเหตุก่อน');return;}
 
   const wasEdit=!!editDate;
   setE(selEmpId,date,{advance:adv,dayoff:off,deduction:ded,note});
+  clearTimeout(_cloudTimer);
   clearForm();
   document.getElementById('entryDate').value=date;
   renderBanner();
   renderEntryList();
-  showToast(wasEdit?'อัปเดตแล้ว ✅':'บันทึกแล้ว ✅');
+  showToast(wasEdit?'อัปเดตแล้ว ✅':'บันทึกในเครื่องแล้ว');
+  try{
+    await pushCloud(true);
+    showToast(wasEdit?'อัปเดตแล้ว ซิงค์แล้ว ✅':'บันทึกแล้ว ซิงค์แล้ว ✅');
+  }catch(e){
+    showToast('บันทึกในเครื่องแล้ว จะซิงค์เมื่อมีเน็ต');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1745,13 +1779,15 @@ function showToast(msg){
 //  INIT
 // ═══════════════════════════════════════════════════════════
 (async function init(){
-  await dbLoad();
   document.getElementById('eRate').addEventListener('input',calcHr);
   document.getElementById('eHours').addEventListener('input',calcHr);
 
   const t=todayStr();
   const[y,m]=t.split('-');
   viewMonth=`${y}-${m}`;
+
+  const local=readLocal();
+  if(local) db=mergeDb(db, local);
 
   document.getElementById('hMonth').textContent=fMon(viewMonth);
   document.getElementById('entryDate').value=t;
@@ -1769,6 +1805,9 @@ function showToast(msg){
   renderStorageMode();
   refreshLanInfo();
   setupPWA();
+
+  await dbLoad();
+  paint();
 })();
 
 function renderStorageMode(){
