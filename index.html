@@ -1100,8 +1100,6 @@ function ini(name){return (name.replace(/\s*\(.*\)/,'').trim()||'?')[0];}
 const MS_S=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
 const MS_F=['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 const DW=['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'];
-const DW_S=['อา','จ','อ','พ','พฤ','ศ','ส'];
-function fmtWdDate(iso){return `${DW_S[dowBangkok(iso)]}.${+iso.slice(8)}`;}
 
 function pad2(n){return String(n).padStart(2,'0');}
 function ld(s){return new Date(s+'T12:00:00+07:00');}
@@ -1443,8 +1441,6 @@ function syncShopDisplay(){
 function aggEmp(emp,ms){
   const[y,m]=ms.split('-');
   const d=dim(ms);
-  const today=todayStr();
-  const isCur=today.slice(0,7)===ms;
   const weekendSet=emp.type==='weekend'?new Set(weekendDatesInMonth(ms)):null;
   let adv=0,off=0,ded=0;const dd=[];
   for(let i=1;i<=d;i++){
@@ -1452,7 +1448,7 @@ function aggEmp(emp,ms){
     const e=db.entries[ek(emp.id,ds)];
     if(!e)continue;
     adv+=e.advance||0;ded+=e.deduction||0;
-    if(e.dayoff && !(isCur && ds>today)){
+    if(e.dayoff){
       if(!weekendSet || weekendSet.has(ds)) off+=e.dayoff;
     }
     if((e.deduction||0)>0&&e.note)dd.push(`${e.note} ${e.deduction.toLocaleString()}`);
@@ -1468,38 +1464,19 @@ function calcNet(emp,ms,adv,off,ded){
   const cfg=db.monthCfg[ms]||{};
   const cfgTd=toNum(cfg.totalDays, toNum(document.getElementById('totalDays')?.value, dim(ms)));
   const cfgSh=toNum(cfg.shopHolidays, toNum(document.getElementById('shopHol')?.value, 0));
-  const today=todayStr();
-  const isCur=today.slice(0,7)===ms;
 
-  let totalDays, shopHol, work, futureDays=[], elapsedDays;
+  let totalDays, shopHol, work;
   if(emp.type==='weekend'){
-    const dates=weekendDatesInMonth(ms);
-    totalDays=dates.length;
+    totalDays=countWeekendDays(ms);
     shopHol=0;
-    const elapsed=isCur?dates.filter(iso=>iso<=today):dates;
-    futureDays=isCur?dates.filter(iso=>iso>today):[];
-    elapsedDays=elapsed.length;
-    const offElapsed=elapsed.reduce((s,iso)=>s+(db.entries[ek(emp.id,iso)]?.dayoff||0),0);
-    work=Math.max(0,elapsedDays-offElapsed);
   } else {
     totalDays=cfgTd;
     shopHol=cfgSh;
-    if(isCur){
-      const todayN=+today.slice(8);
-      elapsedDays=Math.min(totalDays, todayN);
-      if(totalDays>todayN){
-        const[y,m]=ms.split('-').map(Number);
-        for(let d=todayN+1;d<=totalDays;d++) futureDays.push(`${y}-${pad2(m)}-${pad2(d)}`);
-      }
-      work=Math.max(0,elapsedDays-shopHol-off);
-    } else {
-      elapsedDays=totalDays;
-      work=Math.max(0,totalDays-shopHol-off);
-    }
   }
+  work=Math.max(0,totalDays-shopHol-off);
   const gross=work*emp.dailyRate;
   const net=gross-adv-ded;
-  return{totalDays,shopHol,work,gross,net,futureDays,elapsedDays};
+  return{totalDays,shopHol,work,gross,net};
 }
 
 function onSumChange(){
@@ -1556,14 +1533,10 @@ function renderSum(){
     </div>`;
   box.appendChild(banner);
 
-  allData.forEach(({emp,idx,adv,off,ded,dd,totalDays,shopHol,work,gross,net,futureDays,elapsedDays})=>{
-    const denom=elapsedDays||totalDays;
-    const pct=denom>0?Math.round(work/denom*100):0;
+  allData.forEach(({emp,idx,adv,off,ded,dd,totalDays,shopHol,work,gross,net})=>{
+    const pct=totalDays>0?Math.round(work/totalDays*100):0;
     const c=color(idx);
     const isWeekend=emp.type==='weekend';
-    const futureNote=futureDays&&futureDays.length
-      ? futureDays.map(fmtWdDate).join(', ')
-      : '';
     const ptTag=isWeekend?`<span class="wk-badge">ศ/ส/อา (${totalDays} วัน)</span>`:
                 emp.type==='parttime'?`<span class="wk-badge">${emp.hourlyRate} บ./ชม.</span>`:'';
     const isTx=emp.payMethod==='transfer';
@@ -1584,13 +1557,12 @@ function renderSum(){
       </div>
       <div class="prog-wrap">
         <div class="prog-top">
-          <span>วันทำงาน ${work} จาก ${denom} วัน${isWeekend?' (ศ/ส/อา)':''}</span>
+          <span>วันทำงาน ${work} จาก ${totalDays} วัน${isWeekend?' (ศ/ส/อา)':''}</span>
           <span>${pct}%</span>
         </div>
         <div class="prog-bg"><div class="prog-fill" style="width:${pct}%;background:${c}"></div></div>
       </div>
       <div class="sum-rows">
-        ${futureNote?`<div class="sr"><span class="l">ยังไม่ถึง</span><span class="v" style="color:var(--muted)">${futureNote} — ยังไม่นับ</span></div>`:''}
         ${shopHol>0&&!isWeekend?`<div class="sr neg"><span class="l">หยุดตามร้าน</span><span class="v">−${shopHol} วัน</span></div>`:''}
         ${isWeekend&&sh>0?`<div class="sr"><span class="l">หยุดร้าน</span><span class="v" style="color:var(--muted)">ไม่กระทบ</span></div>`:''}
         ${off>0?`<div class="sr neg"><span class="l">หยุดส่วนตัว</span><span class="v">−${off} วัน</span></div>`:''}
@@ -1726,26 +1698,18 @@ function printReport(){
   let cards='';
   db.employees.forEach(emp=>{
     const{adv,off,ded,dd}=aggEmp(emp,ms);
-    const{totalDays,shopHol,work,gross,net,futureDays}=calcNet(emp,ms,adv,off,ded);
+    const{totalDays,shopHol,work,gross,net}=calcNet(emp,ms,adv,off,ded);
     const isWeekend=emp.type==='weekend';
     const noteAd=dd.length?dd.join(', '):'';
-    const futureNote=futureDays&&futureDays.length
-      ? `ยังไม่นับ ${futureDays.map(fmtWdDate).join(', ')}`
-      : '';
 
     const offRow=isWeekend
       ? `<div class="prow"><span class="pl">หยุด</span><span class="peq">=</span><span class="pv">ไม่กระทบ</span><span class="pnote">(ศ/ส/อา)</span></div>`
       : `<div class="prow"><span class="pl">หยุด</span><span class="peq">=</span><span class="pv">${shopHol||'-'} วัน</span><span class="pnote">(ตามร้าน)</span></div>`;
 
-    const daysLabel=isWeekend
-      ? `เดือน ${monShort} ศ/ส/อา`
-      : `เดือน ${monShort}`;
-    const daysVal=`${work} วัน${futureNote?` / ${totalDays}`:''}`;
-
     cards+=`
       <div class="pcard">
         <div class="pcard-head">${emp.name}</div>
-        <div class="prow"><span class="pl">${daysLabel}</span><span class="peq">=</span><span class="pv">${daysVal}</span>${futureNote?`<span class="pnote">${futureNote}</span>`:''}</div>
+        <div class="prow"><span class="pl">เดือน ${monShort} ${isWeekend?'ศ/ส/อา':`(1-${totalDays})`}</span><span class="peq">=</span><span class="pv">${totalDays} วัน</span></div>
         ${offRow}
         <div class="prow"><span class="pl">หยุดเพิ่ม</span><span class="peq">=</span><span class="pv">${off||'-'} วัน</span></div>
         <div class="prow"><span class="pl">เบิก</span><span class="peq"></span><span class="pv">${adv?adv.toLocaleString():'-'}</span></div>
