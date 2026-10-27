@@ -1100,30 +1100,42 @@ function ini(name){return (name.replace(/\s*\(.*\)/,'').trim()||'?')[0];}
 const MS_S=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
 const MS_F=['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 const DW=['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'];
+const DW_S=['อา','จ','อ','พ','พฤ','ศ','ส'];
+function fmtWdDate(iso){return `${DW_S[dowBangkok(iso)]}.${+iso.slice(8)}`;}
 
 function pad2(n){return String(n).padStart(2,'0');}
-function ld(s){return new Date(s+'T00:00:00');}
+function ld(s){return new Date(s+'T12:00:00+07:00');}
 function todayStr(){
-  const d=new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok'}).format(new Date());
 }
-function ymd(d){return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;}
-function fDay(s){const d=ld(s);return `${DW[d.getDay()]}ที่ ${d.getDate()} ${MS_S[d.getMonth()]} ${d.getFullYear()+543}`;}
-function fDayShort(s){const d=ld(s);return `${d.getDate()} ${MS_S[d.getMonth()]}`;}
+function ymd(d){
+  if(!d) return todayStr();
+  return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok'}).format(d);
+}
+function fDay(s){
+  const dw=dowBangkok(s);
+  return `${DW[dw]}ที่ ${+s.slice(8)} ${MS_S[+s.slice(5,7)-1]} ${+s.slice(0,4)+543}`;
+}
+function fDayShort(s){return `${+s.slice(8)} ${MS_S[+s.slice(5,7)-1]}`;}
 function fMon(ms){const[y,m]=ms.split('-');return `${MS_F[+m-1]} ${+y+543}`;}
-function dim(ms){const[y,m]=ms.split('-').map(Number);return new Date(y,m,0).getDate();}
+function dim(ms){const[y,m]=ms.split('-').map(Number);return new Date(Date.UTC(y,m,0)).getUTCDate();}
 function monthOf(d){return d.substring(0,7);}
-
-/** Count Fri(5)+Sat(6)+Sun(0) in month */
-function countWeekendDays(ms){
-  const[y,m]=ms.split('-').map(Number);
-  let c=0;
-  for(let d=1;d<=new Date(y,m,0).getDate();d++){
-    const dw=new Date(y,m-1,d).getDay();
-    if(dw===0||dw===5||dw===6)c++;
-  }
-  return c;
+function dowBangkok(iso){
+  const w=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Bangkok',weekday:'short'}).format(new Date(iso+'T12:00:00+07:00'));
+  return {Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6}[w];
 }
+function weekendDatesInMonth(ms){
+  const[y,m]=ms.split('-').map(Number);
+  const last=dim(ms);
+  const out=[];
+  for(let d=1;d<=last;d++){
+    const iso=`${y}-${pad2(m)}-${pad2(d)}`;
+    const dw=dowBangkok(iso);
+    if(dw===0||dw===5||dw===6) out.push(iso);
+  }
+  return out;
+}
+function countWeekendDays(ms){ return weekendDatesInMonth(ms).length; }
 
 // ═══════════════════════════════════════════════════════════
 //  STATE
@@ -1238,8 +1250,8 @@ function onDateChange(){
 
 function shiftDay(d){
   const el=document.getElementById('entryDate');
-  const dt=ld(el.value);dt.setDate(dt.getDate()+d);
-  el.value=ymd(dt);
+  const dt=ld(el.value);
+  el.value=ymd(new Date(dt.getTime()+d*86400000));
 }
 
 function tintField(el,cls){
@@ -1337,7 +1349,6 @@ function renderEntryList(){
     if(item.dayoff)    tags.push(`<span class="tag off">หยุด ${item.dayoff} วัน</span>`);
     if(item.deduction) tags.push(`<span class="tag ded">หัก ${item.deduction.toLocaleString()} ฿</span>`);
 
-    const dt=ld(item.date);
     const el=document.createElement('div');
     el.className='entry-item';
     el.innerHTML=`
@@ -1346,7 +1357,7 @@ function renderEntryList(){
         <div class="ei-top">
           <div>
             <div class="ei-date">${fDayShort(item.date)}</div>
-            <div class="ei-wd">${DW[dt.getDay()]}</div>
+            <div class="ei-wd">${DW[dowBangkok(item.date)]}</div>
           </div>
           <div class="ei-tags">${tags.join('')}</div>
         </div>
@@ -1432,12 +1443,22 @@ function syncShopDisplay(){
 function aggEmp(emp,ms){
   const[y,m]=ms.split('-');
   const d=dim(ms);
+  const today=todayStr();
+  const isCur=today.slice(0,7)===ms;
+  const weekendSet=emp.type==='weekend'?new Set(weekendDatesInMonth(ms)):null;
   let adv=0,off=0,ded=0;const dd=[];
   for(let i=1;i<=d;i++){
-    const ds=`${y}-${m.padStart(2,'0')}-${String(i).padStart(2,'0')}`;
+    const ds=`${y}-${pad2(+m)}-${pad2(i)}`;
     const e=db.entries[ek(emp.id,ds)];
     if(!e)continue;
-    adv+=e.advance||0;off+=e.dayoff||0;ded+=e.deduction||0;
+    adv+=e.advance||0;ded+=e.deduction||0;
+    if(e.dayoff){
+      if(weekendSet){
+        if(weekendSet.has(ds) && !(isCur && ds>today)) off+=e.dayoff;
+      } else {
+        off+=e.dayoff;
+      }
+    }
     if((e.deduction||0)>0&&e.note)dd.push(`${e.note} ${e.deduction.toLocaleString()}`);
   }
   return{adv,off,ded,dd};
@@ -1451,20 +1472,28 @@ function calcNet(emp,ms,adv,off,ded){
   const cfg=db.monthCfg[ms]||{};
   const cfgTd=toNum(cfg.totalDays, toNum(document.getElementById('totalDays')?.value, dim(ms)));
   const cfgSh=toNum(cfg.shopHolidays, toNum(document.getElementById('shopHol')?.value, 0));
+  const today=todayStr();
+  const isCur=today.slice(0,7)===ms;
 
-  let totalDays, shopHol;
-  // V3: weekend-only worker not affected by shop holidays
+  let totalDays, shopHol, work, futureDays=[], elapsedDays;
   if(emp.type==='weekend'){
-    totalDays=countWeekendDays(ms);
+    const dates=weekendDatesInMonth(ms);
+    totalDays=dates.length;
     shopHol=0;
+    const elapsed=isCur?dates.filter(iso=>iso<=today):dates;
+    futureDays=isCur?dates.filter(iso=>iso>today):[];
+    elapsedDays=elapsed.length;
+    const offElapsed=elapsed.reduce((s,iso)=>s+(db.entries[ek(emp.id,iso)]?.dayoff||0),0);
+    work=Math.max(0,elapsedDays-offElapsed);
   } else {
     totalDays=cfgTd;
     shopHol=cfgSh;
+    elapsedDays=totalDays;
+    work=Math.max(0,totalDays-shopHol-off);
   }
-  const work=Math.max(0,totalDays-shopHol-off);
   const gross=work*emp.dailyRate;
   const net=gross-adv-ded;
-  return{totalDays,shopHol,work,gross,net};
+  return{totalDays,shopHol,work,gross,net,futureDays,elapsedDays};
 }
 
 function onSumChange(){
@@ -1521,10 +1550,14 @@ function renderSum(){
     </div>`;
   box.appendChild(banner);
 
-  allData.forEach(({emp,idx,adv,off,ded,dd,totalDays,shopHol,work,gross,net})=>{
-    const pct=totalDays>0?Math.round(work/totalDays*100):0;
+  allData.forEach(({emp,idx,adv,off,ded,dd,totalDays,shopHol,work,gross,net,futureDays,elapsedDays})=>{
+    const denom=elapsedDays||totalDays;
+    const pct=denom>0?Math.round(work/denom*100):0;
     const c=color(idx);
     const isWeekend=emp.type==='weekend';
+    const futureNote=isWeekend&&futureDays&&futureDays.length
+      ? futureDays.map(fmtWdDate).join(', ')
+      : '';
     const ptTag=isWeekend?`<span class="wk-badge">ศ/ส/อา (${totalDays} วัน)</span>`:
                 emp.type==='parttime'?`<span class="wk-badge">${emp.hourlyRate} บ./ชม.</span>`:'';
     const isTx=emp.payMethod==='transfer';
@@ -1545,12 +1578,13 @@ function renderSum(){
       </div>
       <div class="prog-wrap">
         <div class="prog-top">
-          <span>วันทำงาน ${work} จาก ${totalDays} วัน${isWeekend?' (ศ/ส/อา)':''}</span>
+          <span>วันทำงาน ${work} จาก ${denom} วัน${isWeekend?' (ศ/ส/อา)':''}</span>
           <span>${pct}%</span>
         </div>
         <div class="prog-bg"><div class="prog-fill" style="width:${pct}%;background:${c}"></div></div>
       </div>
       <div class="sum-rows">
+        ${futureNote?`<div class="sr"><span class="l">ยังไม่ถึง</span><span class="v" style="color:var(--muted)">${futureNote} — ยังไม่นับ</span></div>`:''}
         ${shopHol>0&&!isWeekend?`<div class="sr neg"><span class="l">หยุดตามร้าน</span><span class="v">−${shopHol} วัน</span></div>`:''}
         ${isWeekend&&sh>0?`<div class="sr"><span class="l">หยุดร้าน</span><span class="v" style="color:var(--muted)">ไม่กระทบ</span></div>`:''}
         ${off>0?`<div class="sr neg"><span class="l">หยุดส่วนตัว</span><span class="v">−${off} วัน</span></div>`:''}
@@ -1686,18 +1720,28 @@ function printReport(){
   let cards='';
   db.employees.forEach(emp=>{
     const{adv,off,ded,dd}=aggEmp(emp,ms);
-    const{totalDays,shopHol,work,gross,net}=calcNet(emp,ms,adv,off,ded);
+    const{totalDays,shopHol,work,gross,net,futureDays}=calcNet(emp,ms,adv,off,ded);
     const isWeekend=emp.type==='weekend';
     const noteAd=dd.length?dd.join(', '):'';
+    const futureNote=isWeekend&&futureDays&&futureDays.length
+      ? `ยังไม่นับ ${futureDays.map(fmtWdDate).join(', ')}`
+      : '';
 
     const offRow=isWeekend
       ? `<div class="prow"><span class="pl">หยุด</span><span class="peq">=</span><span class="pv">ไม่กระทบ</span><span class="pnote">(ศ/ส/อา)</span></div>`
       : `<div class="prow"><span class="pl">หยุด</span><span class="peq">=</span><span class="pv">${shopHol||'-'} วัน</span><span class="pnote">(ตามร้าน)</span></div>`;
 
+    const daysLabel=isWeekend
+      ? `เดือน ${monShort} ศ/ส/อา`
+      : `เดือน ${monShort} (1-${totalDays})`;
+    const daysVal=isWeekend
+      ? `${work} วัน${futureNote?` / ${totalDays}`:''}`
+      : `${totalDays} วัน`;
+
     cards+=`
       <div class="pcard">
         <div class="pcard-head">${emp.name}</div>
-        <div class="prow"><span class="pl">เดือน ${monShort} (1-${totalDays})</span><span class="peq">=</span><span class="pv">${totalDays} วัน</span></div>
+        <div class="prow"><span class="pl">${daysLabel}</span><span class="peq">=</span><span class="pv">${daysVal}</span>${futureNote?`<span class="pnote">${futureNote}</span>`:''}</div>
         ${offRow}
         <div class="prow"><span class="pl">หยุดเพิ่ม</span><span class="peq">=</span><span class="pv">${off||'-'} วัน</span></div>
         <div class="prow"><span class="pl">เบิก</span><span class="peq"></span><span class="pv">${adv?adv.toLocaleString():'-'}</span></div>
