@@ -1452,12 +1452,8 @@ function aggEmp(emp,ms){
     const e=db.entries[ek(emp.id,ds)];
     if(!e)continue;
     adv+=e.advance||0;ded+=e.deduction||0;
-    if(e.dayoff){
-      if(weekendSet){
-        if(weekendSet.has(ds) && !(isCur && ds>today)) off+=e.dayoff;
-      } else {
-        off+=e.dayoff;
-      }
+    if(e.dayoff && !(isCur && ds>today)){
+      if(!weekendSet || weekendSet.has(ds)) off+=e.dayoff;
     }
     if((e.deduction||0)>0&&e.note)dd.push(`${e.note} ${e.deduction.toLocaleString()}`);
   }
@@ -1488,8 +1484,18 @@ function calcNet(emp,ms,adv,off,ded){
   } else {
     totalDays=cfgTd;
     shopHol=cfgSh;
-    elapsedDays=totalDays;
-    work=Math.max(0,totalDays-shopHol-off);
+    if(isCur){
+      const todayN=+today.slice(8);
+      elapsedDays=Math.min(totalDays, todayN);
+      if(totalDays>todayN){
+        const[y,m]=ms.split('-').map(Number);
+        for(let d=todayN+1;d<=totalDays;d++) futureDays.push(`${y}-${pad2(m)}-${pad2(d)}`);
+      }
+      work=Math.max(0,elapsedDays-shopHol-off);
+    } else {
+      elapsedDays=totalDays;
+      work=Math.max(0,totalDays-shopHol-off);
+    }
   }
   const gross=work*emp.dailyRate;
   const net=gross-adv-ded;
@@ -1555,7 +1561,7 @@ function renderSum(){
     const pct=denom>0?Math.round(work/denom*100):0;
     const c=color(idx);
     const isWeekend=emp.type==='weekend';
-    const futureNote=isWeekend&&futureDays&&futureDays.length
+    const futureNote=futureDays&&futureDays.length
       ? futureDays.map(fmtWdDate).join(', ')
       : '';
     const ptTag=isWeekend?`<span class="wk-badge">ศ/ส/อา (${totalDays} วัน)</span>`:
@@ -1723,7 +1729,7 @@ function printReport(){
     const{totalDays,shopHol,work,gross,net,futureDays}=calcNet(emp,ms,adv,off,ded);
     const isWeekend=emp.type==='weekend';
     const noteAd=dd.length?dd.join(', '):'';
-    const futureNote=isWeekend&&futureDays&&futureDays.length
+    const futureNote=futureDays&&futureDays.length
       ? `ยังไม่นับ ${futureDays.map(fmtWdDate).join(', ')}`
       : '';
 
@@ -1733,10 +1739,8 @@ function printReport(){
 
     const daysLabel=isWeekend
       ? `เดือน ${monShort} ศ/ส/อา`
-      : `เดือน ${monShort} (1-${totalDays})`;
-    const daysVal=isWeekend
-      ? `${work} วัน${futureNote?` / ${totalDays}`:''}`
-      : `${totalDays} วัน`;
+      : `เดือน ${monShort}`;
+    const daysVal=`${work} วัน${futureNote?` / ${totalDays}`:''}`;
 
     cards+=`
       <div class="pcard">
